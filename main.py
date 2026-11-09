@@ -11,163 +11,156 @@ from PyQt6.QtWebEngineCore import (
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
-# --- HẰNG SỐ CẤU HÌNH ---
+# =========================================================================
+# HẰNG SỐ CẤU HÌNH HỆ THỐNG
+# =========================================================================
 GAME_URL_TARGET = "https://hoainiem2003.net/vl4/"
 SCRIPT_FILENAME = "auto_s4_v2.1.9.js"
-WINDOW_DEFAULT_WIDTH = 1280
-WINDOW_DEFAULT_HEIGHT = 800
+WINDOW_DEFAULT_WIDTH = 1366
+WINDOW_DEFAULT_HEIGHT = 860
 WINDOW_TITLE_TEXT = "Võ Lâm Idle - Desktop Client"
 PROFILE_STORAGE_NAME = "VlIdleProfile"
 
+# Script UI bổ trợ: Kéo thả, 2 chế độ Full/Mini, Nút nổi gọi lại, Nạp lại Auto
+INJECTED_UI_CONTROLLER_JS = r"""
+(function() {
+  'use strict';
+  if (window.__AUTO_UI_CONTROLLER_LOADED) return;
+  window.__AUTO_UI_CONTROLLER_LOADED = true;
 
-def read_external_script(script_path: str) -> str:
-    """Đọc nội dung script JS từ file ngoài.
+  const UI_STORAGE_KEY = 'auto_s4_ui_pos_mode_v1';
+  const uiState = {
+    mode: 'full',
+    posX: 20,
+    posY: 70,
+    visible: true,
+    isDragging: false,
+    dragStartX: 0,
+    dragStartY: 0
+  };
 
-    Nếu chưa có, trả về chuỗi rỗng an toàn.
-    """
-    if os.path.exists(script_path):
-        try:
-            with open(script_path, "r", encoding="utf-8") as f:
-                return f.read()
-        except Exception as err:
-            print(f"[Cảnh báo] Không thể đọc file script: {err}")
-    return ""
+  function loadUIPrefs() {
+    try {
+      const raw = localStorage.getItem(UI_STORAGE_KEY);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (['full', 'mini'].includes(d.mode)) uiState.mode = d.mode;
+        if (Number.isFinite(d.posX)) uiState.posX = Math.max(0, Math.min(window.innerWidth - 80, d.posX));
+        if (Number.isFinite(d.posY)) uiState.posY = Math.max(0, Math.min(window.innerHeight - 40, d.posY));
+        if (typeof d.visible === 'boolean') uiState.visible = d.visible;
+      }
+    } catch (_) {}
+  }
 
+  function saveUIPrefs() {
+    try {
+      localStorage.setItem(UI_STORAGE_KEY, JSON.stringify({
+        mode: uiState.mode,
+        posX: uiState.posX,
+        posY: uiState.posY,
+        visible: uiState.visible
+      }));
+    } catch (_) {}
+  }
 
-def setup_web_profile(profile: QWebEngineProfile, base_dir: str) -> None:
-    """Cấu hình bộ nhớ cache và lưu trữ phiên đăng nhập bền vững."""
-    storage_path = os.path.join(base_dir, PROFILE_STORAGE_NAME)
-    os.makedirs(storage_path, exist_ok=True)
+  loadUIPrefs();
 
-    profile.setPersistentStoragePath(storage_path)
-    profile.setPersistentCookiesPolicy(
-        QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
-    )
+  function ensureLauncherButton() {
+    let btn = document.getElementById('vl4-dt-launcher');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = 'vl4-dt-launcher';
+      btn.innerHTML = '⚡ Auto';
+      Object.assign(btn.style, {
+        position: 'fixed',
+        left: '14px',
+        bottom: '14px',
+        zIndex: '999999',
+        padding: '6px 14px',
+        backgroundColor: '#1b2820',
+        color: '#ffd24a',
+        border: '1px solid #e6c67a',
+        borderRadius: '18px',
+        fontSize: '12px',
+        fontWeight: 'bold',
+        cursor: 'pointer',
+        boxShadow: '0 3px 10px rgba(0,0,0,0.85)',
+        display: uiState.visible ? 'none' : 'block'
+      });
+      btn.onclick = () => {
+        uiState.visible = true;
+        saveUIPrefs();
+        updatePanelUI();
+      };
+      document.body.appendChild(btn);
+    } else {
+      btn.style.display = uiState.visible ? 'none' : 'block';
+    }
+  }
 
-    # Đăng ký script tự động chạy mỗi khi hoàn tất tải trang
-    script_full_path = os.path.join(base_dir, SCRIPT_FILENAME)
-    script_content = read_external_script(script_full_path)
+  function makeDraggable(panel, handle) {
+    handle.style.cursor = 'move';
+    handle.onmousedown = (e) => {
+      if (['BUTTON', 'INPUT', 'SELECT', 'A'].includes(e.target.tagName)) return;
+      uiState.isDragging = true;
+      uiState.dragStartX = e.clientX - panel.offsetLeft;
+      uiState.dragStartY = e.clientY - panel.offsetTop;
 
-    if script_content:
-        web_script = QWebEngineScript()
-        web_script.setName("AutoScriptLoader")
-        web_script.setInjectionPoint(
-            QWebEngineScript.InjectionPoint.DocumentReady
-        )
-        web_script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
-        web_script.setSourceCode(script_content)
-        profile.scripts().insert(web_script)
-        print(f"[Khởi tạo] Đã nạp tự động kịch bản: {SCRIPT_FILENAME}")
-    else:
-        print(
-            f"[Thông báo] Chưa tìm thấy {SCRIPT_FILENAME}. App vẫn chạy chế độ duyệt thông thường."
-        )
+      const onMouseMove = (ev) => {
+        if (!uiState.isDragging) return;
+        ev.preventDefault();
+        let newX = ev.clientX - uiState.dragStartX;
+        let newY = ev.clientY - uiState.dragStartY;
+        newX = Math.max(0, Math.min(window.innerWidth - panel.offsetWidth, newX));
+        newY = Math.max(0, Math.min(window.innerHeight - panel.offsetHeight, newY));
 
+        panel.style.left = newX + 'px';
+        panel.style.top = newY + 'px';
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
 
-class GameMainWindow(QMainWindow):
+        uiState.posX = newX;
+        uiState.posY = newY;
+      };
 
-    def __init__(self, base_dir: str):
-        super().__init__()
-        self.base_dir = base_dir
-        self.init_ui()
-        self.init_browser()
-        self.init_tray_icon()
+      const onMouseUp = () => {
+        if (uiState.isDragging) {
+          uiState.isDragging = false;
+          saveUIPrefs();
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+        }
+      };
 
-    def init_ui(self) -> None:
-        self.setWindowTitle(WINDOW_TITLE_TEXT)
-        self.resize(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    };
+  }
 
-    def init_browser(self) -> None:
-        self.browser_view = QWebEngineView(self)
-        self.setCentralWidget(self.browser_view)
+  function reloadAutoRoutine() {
+    try {
+      if (window.__AUTO_S4 && typeof window.__AUTO_S4.stop === 'function') {
+        window.__AUTO_S4.stop();
+        window.__AUTO_S4.remove();
+      }
+    } catch (_) {}
+    document.getElementById('vl4-dt-panel')?.remove();
+    document.getElementById('vl4-dt-launcher')?.remove();
+    window.__AUTO_UI_CONTROLLER_LOADED = false;
+    location.reload();
+  }
 
-        profile = QWebEngineProfile.defaultProfile()
-        setup_web_profile(profile, self.base_dir)
+  function updatePanelUI() {
+    ensureLauncherButton();
+    const panel = document.getElementById('vl4-dt-panel');
+    if (!panel) return;
 
-        page_settings = self.browser_view.settings()
-        page_settings.setAttribute(
-            QWebEngineSettings.WebAttribute.JavascriptEnabled, True
-        )
-        page_settings.setAttribute(
-            QWebEngineSettings.WebAttribute.LocalStorageEnabled, True
-        )
-        page_settings.setAttribute(
-            QWebEngineSettings.WebAttribute.AutoLoadImages, True
-        )
+    if (!uiState.visible) {
+      panel.style.display = 'none';
+      return;
+    }
 
-        self.browser_view.load(QUrl(GAME_URL_TARGET))
-
-    def init_tray_icon(self) -> None:
-        """Khởi tạo biểu tượng chạy ẩn dưới khay hệ thống (System Tray)."""
-        self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon))
-
-        tray_menu = QMenu()
-
-        show_action = QAction("Hiện cửa sổ", self)
-        show_action.triggered.connect(self.show_window_normal)
-        tray_menu.addAction(show_action)
-
-        reload_script_action = QAction("Nạp lại Auto Script", self)
-        reload_script_action.triggered.connect(self.reload_injected_script)
-        tray_menu.addAction(reload_script_action)
-
-        exit_action = QAction("Thoát", self)
-        exit_action.triggered.connect(QApplication.instance().quit)
-        tray_menu.addAction(exit_action)
-
-        self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.activated.connect(self.on_tray_activated)
-        self.tray_icon.show()
-
-    def on_tray_activated(
-        self, reason: QSystemTrayIcon.ActivationReason
-    ) -> None:
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self.show_window_normal()
-
-    def show_window_normal(self) -> None:
-        self.show()
-        self.activateWindow()
-
-    def closeEvent(self, event) -> None:
-        """Thu nhỏ xuống System Tray thay vì tắt hẳn ứng dụng khi bấm X."""
-        if self.tray_icon.isVisible():
-            self.hide()
-            self.tray_icon.showMessage(
-                WINDOW_TITLE_TEXT,
-                "Ứng dụng đang chạy ngầm trong khay hệ thống.",
-                QSystemTrayIcon.MessageIcon.Information,
-                2000,
-            )
-            event.ignore()
-        else:
-            event.accept()
-
-    def reload_injected_script(self) -> None:
-        """Đọc lại file JS từ đĩa và bơm trực tiếp vào trang mà không cần bật lại app."""
-        script_full_path = os.path.join(self.base_dir, SCRIPT_FILENAME)
-        script_content = read_external_script(script_full_path)
-        if script_content:
-            self.browser_view.page().runJavaScript(script_content)
-            self.tray_icon.showMessage(
-                WINDOW_TITLE_TEXT,
-                "Đã nạp lại script Auto thành công!",
-                QSystemTrayIcon.MessageIcon.Information,
-                1500,
-            )
-
-
-def main():
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(False)
-
-    base_directory = os.path.dirname(os.path.abspath(__file__))
-    window = GameMainWindow(base_directory)
-    window.show()
-
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
+    panel.style.display = 'block';
+    panel.style.position = 'fixed';
+    panel.style.left = uiState.posX + 'px';
+    panel.style.top = ui
